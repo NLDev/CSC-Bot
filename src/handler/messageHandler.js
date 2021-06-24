@@ -16,7 +16,7 @@ let config = require("../utils/configHandler").getConfig();
 let cmdHandler = require("./cmdHandler");
 
 /**
- * Handles incomming messages
+ * Handles incoming messages
  *
  * @param {Message} message
  * @param {Client} client
@@ -49,7 +49,6 @@ module.exports = function(message, client){
             if (err) message.channel.send(err);
         });
     }
-
     else if (isModCommand) {
         cmdHandler(message, client, true, (err) => {
             if (err) message.channel.send(err);

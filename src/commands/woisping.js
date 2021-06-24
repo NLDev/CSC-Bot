@@ -5,115 +5,179 @@
 // ================================= //
 
 // Utils
-let log = require("../utils/logger");
 let config = require("../utils/configHandler").getConfig();
-
-const pendingMessagePrefix = "*(Pending-Woisgang-Ping, bitte zustimmen)*";
+const { WoispingVoteData, WoispingReasonData } = require("../storage/model/WoispingData");
+let access = require("../utils/access");
 
 // Internal storage, no need to save this persistent
 let lastPing = 0;
 
 
 /**
- * Allows usage of @Woisgang mention for people having that role assigned
- *
- * @param {import("discord.js").Client} client
- * @param {import("discord.js").Message} message
- * @param {Array} args
+ * @param {import("discord.js").CommandInteraction} interaction
  * @param {Function} callback
- * @returns {Promise<Function>} callback
  */
-exports.run = async(client, message, args, callback) => {
-    const isMod = message.member.roles.cache.some(r => config.bot_settings.moderator_roles.includes(r.name));
-
-    if (!isMod && !message.member.roles.cache.has(config.ids.woisgang_role_id)){
-        log.warn(`User "${message.author.tag}" (${message.author}) tried command "${config.bot_settings.prefix.command_prefix}woisping" and was denied`);
-
-        return callback(
-            `Tut mir leid, ${message.author}. Du hast nicht genügend Rechte um dieses Command zu verwenden =(`
-        );
-    }
-
+async function handler(interaction, callback) {
+    const isMod = access.isModeratorUser(interaction.member);
     const now = Date.now();
 
     if (!isMod && lastPing + config.bot_settings.woisping_limit * 1000 > now) {
-        return callback("Piss dich und spam nicht.");
+        interaction.reply("Piss dich und spam nicht.");
+        return callback();
     }
 
-    const reason = `${args.join(" ")} (von ${message.member})`;
+    const reason = interaction.options.get("grund").value;
 
-    if (isMod) {
+    if(reason.length > 256) {
+        interaction.reply("Bruder gib mal nen kürzeren Grund an, so groß ist die Aufmerksamkeitsspanne eines CSZlers nicht");
+        return callback();
+    }
+
+    if(isMod) {
         lastPing = now;
-        message.channel.send(`<@&${config.ids.woisgang_role_id}> ${reason}`);
+        interaction.reply({ content: `Was läuft, was läuft, was läuft <@&${config.ids.woisgang_role_id}>? Lass mal: **${reason}**`});
     }
     else {
-        const msg = await message.channel.send(`${pendingMessagePrefix} ${reason}`);
-        msg.react("👍");
+        WoispingReasonData.setReason(interaction.id, reason);
+        interaction.reply({
+            content: `Was läuft, was läuft, was läuft soll die Woisgang jetzt ${reason}?`,
+            components: [
+                {
+                    type: 1,
+                    components: [
+                        {
+                            type: 2,
+                            label: "Ja, alter!",
+                            customID: "woisgang_yes",
+                            style: 3,
+                            emoji: {
+                                id: null,
+                                name: "👍"
+                            }
+                        },
+                        {
+                            type: 2,
+                            label: "Nee du...",
+                            customID: "woisgang_no",
+                            style: 4,
+                            emoji: {
+                                id: null,
+                                name: "👎"
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
 
         // we don't set lastPing here to allow multiple concurrent requests
         // let the most liked reason win...
     }
-
     return callback();
-};
+}
 
 /**
- * Handles changes on reactions specific to this command
  *
- * @param {any} event
- * @param {import("discord.js").Client} client
- * @param {import("discord.js").Message} message
- * @returns
+ * @param {import("discord.js").ButtonInteraction} interaction
  */
-exports.reactionHandler = async(event, client, message) => {
-    if (message.embeds.length !== 0
-		|| !message.content.startsWith(pendingMessagePrefix)
-		|| event.d.emoji.name !== "👍") {
-        return false;
-    }
-
-    const reaction = message.reactions.cache.get("👍");
-
-    // shouldn't happen
-    if (!reaction) {
-        return true;
-    }
-
-    const { d: data } = event;
-
-    const user = client.guilds.cache.get(config.ids.guild_id).members.cache.get(data.user_id);
-
-    if (!user) {
-        return true;
-    }
-
-    const isMod = user.roles.cache.some(r => config.bot_settings.moderator_roles.includes(r.name));
-
-    if (!isMod && !user.roles.cache.has(config.ids.woisgang_role_id)){
-        reaction.users.remove(data.user_id);
-        user.send("Somry, du bist leider kein Woisgang-Mitglied und darfst nicht abstimmen.");
-        return true;
-    }
-
-    const amount = reaction.count - 1;
+async function tryPing(interaction) {
     const now = Date.now();
     const couldPing = lastPing + config.bot_settings.woisping_limit * 1000 <= now;
+    const interactionId = interaction.message.interaction.id;
+    if(couldPing) {
+        const numVotes = await WoispingVoteData.getNumOfYesVotes(interactionId);
+        if(numVotes >= config.bot_settings.woisping_threshold) {
+            const {message} = interaction;
+            const {channel} = message;
+            const reason = (await WoispingReasonData.getReason(interactionId)) || "Wois";
+            channel.send(`Meine sehr verehrten Damen und Herren der heiligen <@&${config.ids.woisgang_role_id}>. Das Kollektiv hat entschieden, dass es Zeit ist für **${reason}**.`)
+                .then(async() => await message.delete());
 
-    if (isMod || (amount >= config.bot_settings.woisping_threshold && couldPing)) {
-        const reason = message.content.substr(pendingMessagePrefix.length + 1);
-
-        const {channel} = message;
-        await message.delete();
-
-        lastPing = now;
-        channel.send(`<@&${config.ids.woisgang_role_id}> ${reason}`);
+            lastPing = now;
+        }
     }
-    else if (!couldPing) {
-        reaction.users.remove(data.user_id);
-        user.send("Somry, ich musste deine Zustimmung für den Woisgang-Ping entfernen, weil wir noch etwas warten müssen mit dem Ping.");
-    }
+}
 
-    return true;
-};
+/**
+ *
+ * @param {import("discord.js").ButtonInteraction} interaction
+ * @param {Function} callback
+ * @param {Boolean} vote
+ */
+async function handleButtonInteraction(interaction, callback, vote) {
+    const isWoisgang = interaction.member.roles.cache.has(config.ids.woisgang_role_id);
+    if(!isWoisgang) {
+        interaction.reply({ content: "Sorry bruder, du bist nicht in der Woisgang", ephemeral: true});
+        return callback("Not in woisgang");
+    }
+    const interactionId = interaction.message.interaction?.id;
+    const userId = interaction.member.id;
+    if(!interactionId) {
+        interaction.reply({ content: "Sorry, etwas ist schief gegangen", ephemeral: true});
+        return callback("No interaction ID found");
+    }
+    await WoispingVoteData.setVote(interactionId, userId, vote);
+    return callback();
+}
+
+/**
+ *
+ * @param {import("discord.js").ButtonInteraction} interaction
+ * @param {Function} callback
+ */
+async function handleYes(interaction, callback) {
+    const handle = await handleButtonInteraction(interaction, callback, true);
+    if(!handle) {
+        interaction.reply({ content: "Jaman, das ist die richtige Einstellung 🥳", ephemeral: true});
+        tryPing(interaction);
+        return callback();
+    }
+    return handle;
+}
+
+/**
+ *
+ * @param {import("discord.js").ButtonInteraction} interaction
+ * @param {Function} callback
+ */
+async function handleNo(interaction, callback) {
+    const handle = await handleButtonInteraction(interaction, callback, false);
+    if(!handle) {
+        interaction.reply({ content: "Ok, dann halt nicht 😔", ephemeral: true});
+        return callback();
+    }
+    return handle;
+}
 
 exports.description = `Mitglieder der @Woisgang-Rolle können einen Ping an diese Gruppe absenden. Es müssen mindestens ${config.bot_settings.woisping_threshold} Woisgang-Mitglieder per Reaction zustimmen.\nUsage: ${config.bot_settings.prefix.command_prefix}woisping Text`;
+
+/**
+ * @type {Record<string, CommandDefinition>}
+ */
+exports.applicationCommands = {
+    woisping: {
+        handler,
+        data: {
+            description: "Mitglieder der @Woisgang-Rolle können einen Ping an diese Gruppe absenden.",
+            options: [
+                {
+                    name: "grund",
+                    type: "STRING",
+                    description: "Warum willst du die Woisgang abfucken?",
+                    required: true
+                }
+            ]
+        },
+        permissions: [
+            {
+                id: config.ids.woisgang_role_id,
+                type: "ROLE",
+                permission: true
+            }
+        ],
+        buttonHandler: {
+            woisgang_yes: handleYes,
+            woisgang_no: handleNo
+        }
+    }
+};

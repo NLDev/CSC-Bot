@@ -4,7 +4,9 @@ let path = require("path");
 
 // Dependencies
 let {Sequelize} = require("sequelize");
-const AdditionalMessageData = require("./model/AdditionalMessageData");
+let AdditionalMessageData = require("./model/AdditionalMessageData");
+let {WoispingVoteData, WoispingReasonData} = require("./model/WoispingData");
+let {VoteData} = require("./model/VoteData");
 
 // Models
 let FadingMessage = require("./model/FadingMessage");
@@ -18,6 +20,9 @@ exports.initialize = async function() {
 
     FadingMessage.initialize(sequelize);
     AdditionalMessageData.initialize(sequelize);
+    WoispingVoteData.initialize(sequelize);
+    WoispingReasonData.initialize(sequelize);
+    VoteData.initialize(sequelize);
 
     await sequelize.sync();
 };
